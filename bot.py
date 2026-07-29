@@ -22,6 +22,15 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 ]
 
+def send_test_ping():
+    payload = {
+        "content": "🟢 **Test Bot Wallapop**: Lo script è partito ed è operativo su GitHub Actions!"
+    }
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    except Exception as e:
+        print(f"Errore invio ping test: {e}", flush=True)
+
 def load_seen_items():
     try:
         with open(SEEN_ITEMS_FILE, "r") as f:
@@ -101,6 +110,9 @@ def get_wallapop_data():
     return []
 
 def main():
+    # Invia il messaggio di prova appena parte
+    send_test_ping()
+    
     seen_items = load_seen_items()
     items = get_wallapop_data()
 
