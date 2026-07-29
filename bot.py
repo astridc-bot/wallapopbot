@@ -1,5 +1,5 @@
 import json
-import time
+import sys
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -35,6 +35,101 @@ def send_discord_alert(item):
 
     embed = {
         "title": f"🚨 Nuovo annuncio: {title}",
+        "url": item_url,
+        "color": 3066993,
+        "fields": [
+            {
+                "name": "💰 Prezzo",
+                "value": f"{price} {currency}",
+                "inline": True
+            },
+            {
+                "name": "🔍 Ricerca",
+                "value": SEARCH_KEYWORD,
+                "inline": True
+            }
+        ],
+        "footer": {
+            "text": "Wallapop Alert Bot"
+        }
+    }
+
+    if photo_url:
+        embed["image"] = {"url": photo_url}
+
+    payload = {
+        "content": "@everyone Un nuovo articolo è stato appena pubblicato!",
+        "embeds": [embed]
+    }
+
+    response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    if response.status_code not in [200, 204]:
+        print(f"Errore invio Discord: {response.status_code}, {response.text}", flush=True)
+
+def check_wallapop(page):
+    seen_items = load_seen_items()
+    
+    search_url = f"https://it.wallapop.com/app/search?keywords={SEARCH_KEYWORD}&max_publication_date=any&max_sale_price={MAX_PRICE}&order_by=newest"
+    
+    try:
+        api_data = []
+
+        def handle_response(response):
+            if "search" in response.url and response.status == 200:
+                try:
+                    data = response.json()
+                    if "search_objects" in data:
+                        api_data.extend(data["search_objects"])
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
+        print("🌍 Navigazione su Wallapop...", flush=True)
+        page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_timeout(3000)
+        page.remove_listener("response", handle_response)
+
+        new_found = False
+        for item in api_data:
+            item_id = item.get("id")
+            if item_id and item_id not in seen_items:
+                send_discord_alert(item)
+                seen_items.add(item_id)
+                new_found = True
+
+        if new_found:
+            save_seen_items(seen_items)
+            print("✨ Nuovi articoli trovati e inviati su Discord!", flush=True)
+        else:
+            print("Nessun nuovo annuncio trovato al momento.", flush=True)
+
+    except Exception as e:
+        print(f"Errore durante il caricamento della pagina: {e}", flush=True)
+
+if __name__ == "__main__":
+    print(f"🤖 Avvio controllo singolo per '{SEARCH_KEYWORD}'...", flush=True)
+    
+    with sync_playwright() as p:
+        # Argomenti aggiuntivi per evitare il blocco del browser in ambiente headless cloud
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu"
+            ]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800}
+        )
+        page = context.new_page()
+        
+        check_wallapop(page)
+        
+        browser.close()
+        print("🏁 Procedura completata con successo.", flush=True)        "title": f"🚨 Nuovo annuncio: {title}",
         "url": item_url,
         "color": 3066993,
         "fields": [
