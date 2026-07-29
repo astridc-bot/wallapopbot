@@ -3,7 +3,7 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 
-# URL del tuo Webhook Discord
+# Webhook Discord
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521502269118615622/2KQEzJpDBs6db1w8sI5XLXdRn9_A_vTkIG85p55QwNWcPyHl220vmvJ9acj8uMxGqBi8"
 
 # Parametri di ricerca Wallapop
@@ -69,11 +69,9 @@ def send_discord_alert(item):
 def check_wallapop(page):
     seen_items = load_seen_items()
     
-    # Costruiamo l'URL di ricerca come se naviga un utente vero
     search_url = f"https://it.wallapop.com/app/search?keywords={SEARCH_KEYWORD}&max_publication_date=any&max_sale_price={MAX_PRICE}&order_by=newest"
     
     try:
-        # Intercettiamo la risposta API che la pagina chiama internamente
         api_data = []
 
         def handle_response(response):
@@ -86,9 +84,9 @@ def check_wallapop(page):
                     pass
 
         page.on("response", handle_response)
-        page.goto(search_url, wait_until="networkidle", timeout=30000)
-        
-        # Rimuoviamo il listener per i controlli successivi
+        # Carica la pagina senza attendere l'infinita rete idle
+        page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(5000)
         page.remove_listener("response", handle_response)
 
         new_found = False
@@ -103,24 +101,22 @@ def check_wallapop(page):
             save_seen_items(seen_items)
             print("✨ Nuovi articoli trovati e inviati su Discord!")
         else:
-            print("Nessun nuovo annuncio al momento.")
+            print("Nessun nuovo annuncio trovato al momento.")
 
     except Exception as e:
         print(f"Errore durante il caricamento della pagina: {e}")
 
 if __name__ == "__main__":
-    print(f"🤖 Bot avviato con Playwright per '{SEARCH_KEYWORD}'! Controllo ogni 90 secondi...")
+    print(f"🤖 Avvio controllo singolo per '{SEARCH_KEYWORD}'...")
     
     with sync_playwright() as p:
-        # Avviamo Chromium con configurazioni da browser reale
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800}
         )
         page = context.new_page()
-
-        while True:
-            check_wallapop(page)
-            # Attesa di 90 secondi tra un controllo e l'altro per evitare blocchi IP
-            time.sleep(90)
+        
+        check_wallapop(page)
+        
+        browser.close()
