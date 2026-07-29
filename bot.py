@@ -1,12 +1,10 @@
 import json
-import sys
 import requests
-from playwright.sync_api import sync_playwright
 
 # Webhook Discord
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521502269118615622/2KQEzJpDBs6db1w8sI5XLXdRn9_A_vTkIG85p55QwNWcPyHl220vmvJ9acj8uMxGqBi8"
 
-# Parametri di ricerca Wallapop
+# Parametri di ricerca
 SEARCH_KEYWORD = "zanotti"
 MAX_PRICE = 500
 
@@ -35,6 +33,81 @@ def send_discord_alert(item):
 
     embed = {
         "title": f"🚨 Nuovo annuncio: {title}",
+        "url": item_url,
+        "color": 3066993,
+        "fields": [
+            {
+                "name": "💰 Prezzo",
+                "value": f"{price} {currency}",
+                "inline": True
+            },
+            {
+                "name": "🔍 Ricerca",
+                "value": SEARCH_KEYWORD,
+                "inline": True
+            }
+        ],
+        "footer": {
+            "text": "Wallapop Alert Bot"
+        }
+    }
+
+    if photo_url:
+        embed["image"] = {"url": photo_url}
+
+    payload = {
+        "content": "@everyone Un nuovo articolo è stato appena pubblicato!",
+        "embeds": [embed]
+    }
+
+    response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    if response.status_code not in [200, 204]:
+        print(f"Errore invio Discord: {response.status_code}, {response.text}", flush=True)
+
+def check_wallapop():
+    seen_items = load_seen_items()
+    
+    # URL diretto delle API di Wallapop
+    api_url = f"https://api.wallapop.com/api/v3/general/search?keywords={SEARCH_KEYWORD}&max_sale_price={MAX_PRICE}&order_by=newest"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "X-DeviceOS": "WEB"
+    }
+
+    print(f"🤖 Interrogo Wallapop per '{SEARCH_KEYWORD}'...", flush=True)
+    
+    try:
+        response = requests.get(api_url, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            print(f"⚠️ Errore risposta Wallapop: Stato {response.status_code}", flush=True)
+            return
+
+        data = response.json()
+        items = data.get("search_objects", [])
+
+        new_found = False
+        for item in items:
+            item_id = item.get("id")
+            if item_id and item_id not in seen_items:
+                send_discord_alert(item)
+                seen_items.add(item_id)
+                new_found = True
+
+        if new_found:
+            save_seen_items(seen_items)
+            print("✨ Nuovi articoli trovati e inviati su Discord!", flush=True)
+        else:
+            print("Nessun nuovo annuncio trovato al momento.", flush=True)
+
+    except Exception as e:
+        print(f"Errore durante la richiesta: {e}", flush=True)
+
+if __name__ == "__main__":
+    check_wallapop()
+    print("🏁 Procedura completata con successo.", flush=True)        "title": f"🚨 Nuovo annuncio: {title}",
         "url": item_url,
         "color": 3066993,
         "fields": [
