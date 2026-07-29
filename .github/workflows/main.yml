@@ -2,7 +2,7 @@ name: Wallapop Monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # Esegue ogni 10 minuti
+    - cron: '*/5 * * * *' # Esegue ogni 10 minuti
   workflow_dispatch:
 
 jobs:
