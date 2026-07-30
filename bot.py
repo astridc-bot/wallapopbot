@@ -22,14 +22,18 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 ]
 
-def send_test_ping():
-    payload = {
-        "content": "🟢 **Test Bot Wallapop**: Lo script è partito ed è operativo su GitHub Actions!"
-    }
+def send_discord_webhook(content=None, embed=None):
+    """Funzione generica per inviare messaggi su Discord."""
+    payload = {}
+    if content:
+        payload["content"] = content
+    if embed:
+        payload["embeds"] = [embed]
+        
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
     except Exception as e:
-        print(f"Errore invio ping test: {e}", flush=True)
+        print(f"Errore invio Discord: {e}", flush=True)
 
 def load_seen_items():
     try:
@@ -66,12 +70,7 @@ def send_discord_alert(item):
     if photo_url:
         embed["image"] = {"url": photo_url}
 
-    payload = {
-        "content": "@everyone Un nuovo articolo è stato appena pubblicato!",
-        "embeds": [embed]
-    }
-
-    requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    send_discord_webhook(content="@everyone Un nuovo articolo è stato appena pubblicato!", embed=embed)
 
 def get_wallapop_data():
     api_url = f"https://api.wallapop.com/api/v3/general/search?keywords={SEARCH_KEYWORD}&max_sale_price={MAX_PRICE}&order_by=newest"
@@ -85,34 +84,60 @@ def get_wallapop_data():
         "Referer": "https://it.wallapop.com/"
     }
 
+    # 1. TENTATIVO DIRETTO
     try:
         print("🌐 Tentativo di connessione diretta...", flush=True)
         resp = requests.get(api_url, headers=headers, timeout=5)
         if resp.status_code == 200:
-            return resp.json().get("search_objects", [])
-    except Exception:
-        pass
+            items = resp.json().get("search_objects", [])
+            
+            # Diagnostica OK
+            embed_diag = {
+                "title": "🟢 Esecuzione OK (Connessione Diretta)",
+                "description": f"Trovati **{len(items)}** articoli per la ricerca '{SEARCH_KEYWORD}'.",
+                "color": 3066993
+            }
+            send_discord_webhook(embed=embed_diag)
+            return items
+        else:
+            print(f"Diretta fallita con codice {resp.status_code}", flush=True)
+    except Exception as e:
+        print(f"Errore diretta: {e}", flush=True)
 
+    # 2. TENTATIVO VIA PROXY
     print("⚠️ Connessione diretta bloccata. Uso rotazione Proxy...", flush=True)
     random.shuffle(PROXIES_LIST)
+    
     for proxy_url in PROXIES_LIST:
         proxies = {"http": proxy_url, "https": proxy_url}
         try:
             print(f"🔄 Prova con Proxy: {proxy_url}", flush=True)
             resp = requests.get(api_url, headers=headers, proxies=proxies, timeout=6)
             if resp.status_code == 200:
-                print("✅ Connessione riuscita via Proxy!", flush=True)
-                return resp.json().get("search_objects", [])
+                items = resp.json().get("search_objects", [])
+                
+                # Diagnostica OK Proxy
+                embed_diag = {
+                    "title": "🟡 Esecuzione OK (Via Proxy)",
+                    "description": f"Connesso tramite `{proxy_url}`.\nTrovati **{len(items)}** articoli.",
+                    "color": 15844367
+                }
+                send_discord_webhook(embed=embed_diag)
+                return items
         except Exception:
             continue
             
+    # 3. FALLIMENTO TOTALE
     print("❌ Nessun proxy ha risposto. Wallapop ha respinto la richiesta.", flush=True)
+    embed_fail = {
+        "title": "🔴 ERRORE: Wallapop sta bloccando il Bot",
+        "description": "Sia la connessione diretta da GitHub Actions sia tutti i Proxy nella lista sono stati **bloccati da Wallapop** (HTTP 403 / Timeout).\n\nNon è stato possibile scaricare i nuovi annunci.",
+        "color": 15158332
+    }
+    send_discord_webhook(embed=embed_fail)
     return []
 
 def main():
-    # Invia il messaggio di prova appena parte
-    send_test_ping()
-    
     seen_items = load_seen_items()
     items = get_wallapop_data()
 
@@ -129,6 +154,9 @@ def main():
         print("✨ Nuovi articoli inviati su Discord!", flush=True)
     else:
         print("Nessun nuovo annuncio o dati non disponibili.", flush=True)
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
