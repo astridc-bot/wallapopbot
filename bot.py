@@ -1,6 +1,7 @@
 import json
 import random
 import requests
+import os
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521502269118615622/2KQEzJpDBs6db1w8sI5XLXdRn9_A_vTkIG85p55QwNWcPyHl220vmvJ9acj8uMxGqBi8"
 
@@ -18,12 +19,10 @@ PROXIES_LIST = [
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15"
 ]
 
 def send_discord_webhook(content=None, embed=None):
-    """Funzione generica per inviare messaggi su Discord."""
     payload = {}
     if content:
         payload["content"] = content
@@ -36,11 +35,13 @@ def send_discord_webhook(content=None, embed=None):
         print(f"Errore invio Discord: {e}", flush=True)
 
 def load_seen_items():
-    try:
-        with open(SEEN_ITEMS_FILE, "r") as f:
-            return set(json.load(f))
-    except FileNotFoundError:
-        return set()
+    if os.path.exists(SEEN_ITEMS_FILE):
+        try:
+            with open(SEEN_ITEMS_FILE, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
 
 def save_seen_items(seen_set):
     with open(SEEN_ITEMS_FILE, "w") as f:
@@ -84,63 +85,47 @@ def get_wallapop_data():
         "Referer": "https://it.wallapop.com/"
     }
 
-    # 1. TENTATIVO DIRETTO
+    # Tentativo Connessione Diretta
     try:
-        print("🌐 Tentativo di connessione diretta...", flush=True)
         resp = requests.get(api_url, headers=headers, timeout=5)
         if resp.status_code == 200:
-            items = resp.json().get("search_objects", [])
-            
-            # Diagnostica OK
-            embed_diag = {
-                "title": "🟢 Esecuzione OK (Connessione Diretta)",
-                "description": f"Trovati **{len(items)}** articoli per la ricerca '{SEARCH_KEYWORD}'.",
-                "color": 3066993
-            }
-            send_discord_webhook(embed=embed_diag)
-            return items
-        else:
-            print(f"Diretta fallita con codice {resp.status_code}", flush=True)
-    except Exception as e:
-        print(f"Errore diretta: {e}", flush=True)
+            return resp.json().get("search_objects", [])
+    except Exception:
+        pass
 
-    # 2. TENTATIVO VIA PROXY
-    print("⚠️ Connessione diretta bloccata. Uso rotazione Proxy...", flush=True)
+    # Tentativo tramite Proxy
     random.shuffle(PROXIES_LIST)
-    
     for proxy_url in PROXIES_LIST:
         proxies = {"http": proxy_url, "https": proxy_url}
         try:
-            print(f"🔄 Prova con Proxy: {proxy_url}", flush=True)
             resp = requests.get(api_url, headers=headers, proxies=proxies, timeout=6)
             if resp.status_code == 200:
-                items = resp.json().get("search_objects", [])
-                
-                # Diagnostica OK Proxy
-                embed_diag = {
-                    "title": "🟡 Esecuzione OK (Via Proxy)",
-                    "description": f"Connesso tramite `{proxy_url}`.\nTrovati **{len(items)}** articoli.",
-                    "color": 15844367
-                }
-                send_discord_webhook(embed=embed_diag)
-                return items
+                return resp.json().get("search_objects", [])
         except Exception:
             continue
             
-    # 3. FALLIMENTO TOTALE
-    print("❌ Nessun proxy ha risposto. Wallapop ha respinto la richiesta.", flush=True)
-    embed_fail = {
-        "title": "🔴 ERRORE: Wallapop sta bloccando il Bot",
-        "description": "Sia la connessione diretta da GitHub Actions sia tutti i Proxy nella lista sono stati **bloccati da Wallapop** (HTTP 403 / Timeout).\n\nNon è stato possibile scaricare i nuovi annunci.",
-        "color": 15158332
-    }
-    send_discord_webhook(embed=embed_fail)
-    return []
+    return None  # Restituisce None se falliscono tutte le connessioni
 
 def main():
     seen_items = load_seen_items()
     items = get_wallapop_data()
 
+    if items is None:
+        print("❌ Connessione fallita. Impossibile contattare Wallapop.", flush=True)
+        return
+
+    # Se il file seen_items non esiste ancora (es. primo avvio su GH Actions)
+    if not seen_items:
+        print("ℹ️ Primo avvio / File vuoto: Salvo gli annunci attuali senza inviare notifiche.", flush=True)
+        for item in items:
+            item_id = item.get("id")
+            if item_id:
+                seen_items.add(item_id)
+        save_seen_items(seen_items)
+        send_discord_webhook(content=f"🟢 **Bot attivo**: Inizializzato con {len(seen_items)} articoli già presenti. In attesa di *nuovi* annunci.")
+        return
+
+    # Controllo annunci nuovi reali
     new_found = False
     for item in items:
         item_id = item.get("id")
@@ -153,10 +138,7 @@ def main():
         save_seen_items(seen_items)
         print("✨ Nuovi articoli inviati su Discord!", flush=True)
     else:
-        print("Nessun nuovo annuncio o dati non disponibili.", flush=True)
-
-if __name__ == "__main__":
-    main()
+        print("Nessun nuovo annuncio rispetto all'ultimo controllo.", flush=True)
 
 if __name__ == "__main__":
     main()
