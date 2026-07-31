@@ -3,7 +3,7 @@ name: Wallapop Monitor Bot
 on:
   schedule:
     # Esegue lo script ogni 15 minuti (puoi cambiare l'intervallo)
-    - cron: '*/15 * * * *'
+    - cron: '*/3 * * * *'
   workflow_dispatch: # Ti permette di avviarlo manualmente dalla scheda Actions
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
           pip install requests
 
       - name: Esecuzione dello script Python
-        run: python main.py
+        run: python bot.py
 
       - name: Salva e aggiorna seen_items.json su GitHub
         run: |
