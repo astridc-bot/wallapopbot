@@ -5,7 +5,6 @@ import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import cloudscraper
-from bs4 import BeautifulSoup
 
 # --- CONFIGURAZIONE ---
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521502269118615622/2KQEzJpDBs6db1w8sI5XLXdRn9_A_vTkIG85p55QwNWcPyHl220vmvJ9acj8uMxGqBi8"
@@ -13,16 +12,16 @@ SEARCH_KEYWORD = "derhy"
 SEEN_ITEMS_FILE = "seen_wallapop_items.json"
 CHECK_INTERVAL_SECONDS = 30  # Frequenza controllo in secondi
 
-# Dummy HTTP Server per soddisfare l'healthcheck di Render
+# Dummy Server HTTP per l'healthcheck di Render
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Wallapop Bot Active & Running!")
+        self.wfile.write(b"Wallapop API Bot Active & Running!")
 
     def log_message(self, format, *args):
-        return  # Nasconde i log HTTP per non intasare la console
+        return
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
@@ -59,7 +58,7 @@ def save_seen_items(seen_set):
 
 def send_discord_alert(item):
     title = item.get("title", "Senza titolo")
-    price = item.get("price", "N/A")
+    price = f"{item.get('price')} €" if item.get('price') else "N/A"
     item_url = item.get("url", "https://it.wallapop.com")
     photo_url = item.get("photo")
 
@@ -71,61 +70,13 @@ def send_discord_alert(item):
             {"name": "💰 Prezzo", "value": price, "inline": True},
             {"name": "🔍 Keyword", "value": SEARCH_KEYWORD.capitalize(), "inline": True}
         ],
-        "footer": {"text": "Wallapop Monitor Bot"}
+        "footer": {"text": "Wallapop API Monitor Bot"}
     }
 
     if photo_url:
         embed["image"] = {"url": photo_url}
 
     send_discord_webhook(content=f"@everyone Trovato un nuovo articolo per '{SEARCH_KEYWORD}' su Wallapop!", embed=embed)
-
-def parse_wallapop_html(html_content):
-    soup = BeautifulSoup(html_content, "html.parser")
-    items = []
-    
-    # Trova i link delle schede prodotto di Wallapop
-    links = soup.find_all("a", href=True)
-    
-    for link in links:
-        href = link["href"]
-        # Gli annunci Wallapop contengono solitamente "/item/" nell'URL
-        if "/item/" in href:
-            item_url = href if href.startswith("http") else f"https://it.wallapop.com{href}"
-            clean_url = item_url.split("?")[0]
-            
-            img_elem = link.find("img")
-            title = ""
-            if img_elem and img_elem.get("alt"):
-                title = img_elem.get("alt")
-            elif link.get("title"):
-                title = link.get("title")
-
-            if not title:
-                try:
-                    title = clean_url.split("/item/")[1].replace("-", " ")
-                except IndexError:
-                    title = "Senza titolo"
-
-            photo_url = img_elem.get("src") if img_elem else None
-
-            price = "Vedi su Wallapop"
-            parent = link.find_parent("div")
-            if parent:
-                price_elem = parent.find(lambda tag: tag.name in ["p", "span", "div"] and "€" in tag.text)
-                if price_elem:
-                    price = price_elem.text.strip()
-
-            if SEARCH_KEYWORD.lower() in title.lower() or SEARCH_KEYWORD.lower() in clean_url.lower():
-                items.append({
-                    "id": clean_url,
-                    "title": title.strip().capitalize(),
-                    "price": price,
-                    "url": clean_url,
-                    "photo": photo_url
-                })
-            
-    unique_items = {item["id"]: item for item in items}.values()
-    return list(unique_items)
 
 def get_wallapop_data():
     now = get_current_time()
@@ -141,25 +92,44 @@ def get_wallapop_data():
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept": "application/json, text/plain, */*",
         "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Connection": "keep-alive"
+        "DeviceOS": "WEB"
     }
 
-    try:
-        # Step 1: Visita la home di Wallapop Italia per impostare i cookie
-        home_resp = scraper.get("https://it.wallapop.com/", headers=headers, timeout=15)
-        
-        if home_resp.status_code != 200:
-            print(f"[{now}] ⚠️ ATTENZIONE: Homepage Wallapop non accessibile! (HTTP {home_resp.status_code})", flush=True)
-            return None
+    # API pubblica di ricerca di Wallapop
+    api_url = f"https://api.wallapop.com/api/v3/general/search?keywords={SEARCH_KEYWORD}&order_by=newest"
 
-        # Step 2: Cerca gli articoli ordinati per i più recenti
-        search_url = f"https://it.wallapop.com/app/search?keywords={SEARCH_KEYWORD}&order_by=newest"
-        resp = scraper.get(search_url, headers=headers, timeout=15)
+    try:
+        resp = scraper.get(api_url, headers=headers, timeout=15)
         
         if resp.status_code == 200:
-            filtered_items = parse_wallapop_html(resp.text)
+            data = resp.json()
+            # Gli oggetti cercati sono dentro l'array "search_objects"
+            raw_items = data.get("search_objects", [])
+            filtered_items = []
+
+            for item in raw_items:
+                item_id = str(item.get("id", ""))
+                title = item.get("title", "")
+                price = item.get("price")
+                web_path = item.get("web_slug", "")
+                
+                # Generiamo l'URL completo del prodotto
+                url = f"https://it.wallapop.com/item/{web_path}" if web_path else f"https://it.wallapop.com/item/{item_id}"
+                
+                # Immagine copertina
+                images = item.get("images", [])
+                photo_url = images[0].get("original") if images else None
+
+                filtered_items.append({
+                    "id": item_id,
+                    "title": title,
+                    "price": price,
+                    "url": url,
+                    "photo": photo_url
+                })
+                
             print(f"[{now}] ✅ Scansione Wallapop completata. Trovati {len(filtered_items)} articoli.", flush=True)
             return filtered_items
 
@@ -172,7 +142,7 @@ def get_wallapop_data():
             return None
 
     except Exception as e:
-        print(f"[{now}] ❌ Errore durante lo scraping di Wallapop: {e}", flush=True)
+        print(f"[{now}] ❌ Errore durante la richiesta a Wallapop: {e}", flush=True)
         return None
 
 def check_for_updates(seen_items):
@@ -183,14 +153,15 @@ def check_for_updates(seen_items):
         print(f"[{now}] Scansione interrotta o fallita.", flush=True)
         return seen_items
 
+    # Primo avvio: salviamo gli articoli attualmente online per non spammare
     if not seen_items:
-        print(f"[{now}] Inizializzazione Wallapop: salvo gli articoli correnti...", flush=True)
+        print(f"[{now}] Inizializzazione Wallapop: salviamo i {len(items)} articoli correnti...", flush=True)
         for item in items:
             item_id = item.get("id")
             if item_id:
                 seen_items.add(item_id)
         save_seen_items(seen_items)
-        send_discord_webhook(content=f"🟢 **Wallapop Bot attivo**: Inizializzato con {len(seen_items)} articoli per '{SEARCH_KEYWORD}'. In attesa di nuove uscite!")
+        send_discord_webhook(content=f"🟢 **Wallapop Bot attivo**: Salvati {len(seen_items)} articoli correnti per '{SEARCH_KEYWORD}'. In attesa di nuovi annunci!")
         return seen_items
 
     new_found = False
@@ -200,7 +171,7 @@ def check_for_updates(seen_items):
             send_discord_alert(item)
             seen_items.add(item_id)
             new_found = True
-            print(f"[{now}] 🔔 Nuova notifica inviata per: {item_id}", flush=True)
+            print(f"[{now}] 🔔 Nuova notifica inviata per item ID: {item_id}", flush=True)
 
     if new_found:
         save_seen_items(seen_items)
@@ -208,11 +179,10 @@ def check_for_updates(seen_items):
     return seen_items
 
 if __name__ == "__main__":
-    # Avvio del dummy server HTTP per Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
     seen_items = load_seen_items()
-    print(f"[{get_current_time()}] 🚀 Bot Wallapop avviato. Controllo ogni {CHECK_INTERVAL_SECONDS} secondi...")
+    print(f"[{get_current_time()}] 🚀 Bot Wallapop API avviato. Controllo ogni {CHECK_INTERVAL_SECONDS} secondi...")
     
     while True:
         try:
