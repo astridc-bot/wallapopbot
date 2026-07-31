@@ -8,7 +8,7 @@ import cloudscraper
 from bs4 import BeautifulSoup
 
 # --- CONFIGURAZIONE ---
-DISCORD_WEBHOOK_URL = "INSERISCI_QUI_IL_TUO_WEBHOOK_DISCORD"
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521502269118615622/2KQEzJpDBs6db1w8sI5XLXdRn9_A_vTkIG85p55QwNWcPyHl220vmvJ9acj8uMxGqBi8"
 SEARCH_KEYWORD = "derhy"
 SEEN_ITEMS_FILE = "seen_wallapop_items.json"
 CHECK_INTERVAL_SECONDS = 30  # Frequenza controllo in secondi
