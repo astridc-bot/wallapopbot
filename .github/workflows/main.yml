@@ -34,3 +34,7 @@ jobs:
           git add seen_items.json
           git diff-index --quiet HEAD || git commit -m "Chore: aggiornato visto articoli [skip ci]"
           git push
+      - name: Checkout del repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
