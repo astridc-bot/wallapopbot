@@ -1,32 +1,12 @@
 import datetime
 import json
 import os
-import time
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import cloudscraper
 
 # --- CONFIGURAZIONE ---
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521502269118615622/2KQEzJpDBs6db1w8sI5XLXdRn9_A_vTkIG85p55QwNWcPyHl220vmvJ9acj8uMxGqBi8"
 SEARCH_KEYWORD = "derhy"
 SEEN_ITEMS_FILE = "seen_wallapop_items.json"
-CHECK_INTERVAL_SECONDS = 30  # Frequenza controllo in secondi
-
-# Dummy Server HTTP per l'healthcheck di Render
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        self.wfile.write(b"Wallapop API Bot Active & Running!")
-
-    def log_message(self, format, *args):
-        return
-
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-    server.serve_forever()
 
 def get_current_time():
     return datetime.datetime.now().strftime("%H:%M:%S")
@@ -54,7 +34,7 @@ def load_seen_items():
 
 def save_seen_items(seen_set):
     with open(SEEN_ITEMS_FILE, "w") as f:
-        json.dump(list(seen_set), f)
+        json.dump(list(seen_set), f, indent=2)
 
 def send_discord_alert(item):
     title = item.get("title", "Senza titolo")
@@ -94,10 +74,11 @@ def get_wallapop_data():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Origin": "https://it.wallapop.com",
+        "Referer": "https://it.wallapop.com/",
         "DeviceOS": "WEB"
     }
 
-    # API pubblica di ricerca di Wallapop
     api_url = f"https://api.wallapop.com/api/v3/general/search?keywords={SEARCH_KEYWORD}&order_by=newest"
 
     try:
@@ -105,7 +86,6 @@ def get_wallapop_data():
         
         if resp.status_code == 200:
             data = resp.json()
-            # Gli oggetti cercati sono dentro l'array "search_objects"
             raw_items = data.get("search_objects", [])
             filtered_items = []
 
@@ -115,10 +95,7 @@ def get_wallapop_data():
                 price = item.get("price")
                 web_path = item.get("web_slug", "")
                 
-                # Generiamo l'URL completo del prodotto
                 url = f"https://it.wallapop.com/item/{web_path}" if web_path else f"https://it.wallapop.com/item/{item_id}"
-                
-                # Immagine copertina
                 images = item.get("images", [])
                 photo_url = images[0].get("original") if images else None
 
@@ -136,7 +113,6 @@ def get_wallapop_data():
         elif resp.status_code in (403, 406, 429):
             print(f"[{now}] ⚠️ ATTENZIONE: Blocco anti-bot Wallapop! (HTTP {resp.status_code})", flush=True)
             return None
-            
         else:
             print(f"[{now}] ❌ Errore Wallapop HTTP {resp.status_code}", flush=True)
             return None
@@ -145,24 +121,21 @@ def get_wallapop_data():
         print(f"[{now}] ❌ Errore durante la richiesta a Wallapop: {e}", flush=True)
         return None
 
-def check_for_updates(seen_items):
-    now = get_current_time()
+def main():
+    seen_items = load_seen_items()
     items = get_wallapop_data()
 
     if items is None:
-        print(f"[{now}] Scansione interrotta o fallita.", flush=True)
-        return seen_items
+        return
 
-    # Primo avvio: salviamo gli articoli attualmente online per non spammare
     if not seen_items:
-        print(f"[{now}] Inizializzazione Wallapop: salviamo i {len(items)} articoli correnti...", flush=True)
+        print(f"[{get_current_time()}] Inizializzazione: salvataggio dei primi {len(items)} articoli...", flush=True)
         for item in items:
-            item_id = item.get("id")
-            if item_id:
-                seen_items.add(item_id)
+            if item.get("id"):
+                seen_items.add(item.get("id"))
         save_seen_items(seen_items)
-        send_discord_webhook(content=f"🟢 **Wallapop Bot attivo**: Salvati {len(seen_items)} articoli correnti per '{SEARCH_KEYWORD}'. In attesa di nuovi annunci!")
-        return seen_items
+        send_discord_webhook(content=f"🟢 **Wallapop Bot attivo**: Inizializzati {len(seen_items)} articoli per '{SEARCH_KEYWORD}'.")
+        return
 
     new_found = False
     for item in items:
@@ -171,23 +144,9 @@ def check_for_updates(seen_items):
             send_discord_alert(item)
             seen_items.add(item_id)
             new_found = True
-            print(f"[{now}] 🔔 Nuova notifica inviata per item ID: {item_id}", flush=True)
 
     if new_found:
         save_seen_items(seen_items)
-        
-    return seen_items
 
 if __name__ == "__main__":
-    threading.Thread(target=run_dummy_server, daemon=True).start()
-    
-    seen_items = load_seen_items()
-    print(f"[{get_current_time()}] 🚀 Bot Wallapop API avviato. Controllo ogni {CHECK_INTERVAL_SECONDS} secondi...")
-    
-    while True:
-        try:
-            seen_items = check_for_updates(seen_items)
-        except Exception as e:
-            print(f"[{get_current_time()}] ❌ Errore imprevisto nel ciclo: {e}", flush=True)
-            
-        time.sleep(CHECK_INTERVAL_SECONDS)
+    main()
