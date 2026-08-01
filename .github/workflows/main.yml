@@ -2,9 +2,9 @@ name: Wallapop Monitor Bot
 
 on:
   schedule:
-    # Esegue lo script ogni 5 minuti (il limite minimo consigliato su GitHub Actions)
+    # Esegue lo script ogni 5 minuti
     - cron: '*/5 * * * *'
-  workflow_dispatch: # Permette di avviarlo manualmente da GitHub
+  workflow_dispatch: # Permette l'esecuzione manuale da GitHub
 
 jobs:
   run-bot:
@@ -24,7 +24,7 @@ jobs:
       - name: Installazione dipendenze
         run: |
           python -m pip install --upgrade pip
-          pip install requests cloudscraper beautifulsoup4
+          pip install curl-cffi
 
       - name: Esecuzione dello script Python
         run: python wallapop_bot.py
