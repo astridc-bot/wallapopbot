@@ -1,14 +1,38 @@
 import datetime
 import json
 import os
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from curl_cffi import requests
 
 # --- CONFIGURAZIONE ---
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521502269118615622/2KQEzJpDBs6db1w8sI5XLXdRn9_A_vTkIG85p55QwNWcPyHl220vmvJ9acj8uMxGqBi8"
 SEARCH_KEYWORD = "derhy"
 SEEN_ITEMS_FILE = "seen_wallapop_items.json"
+CHECK_INTERVAL_SECONDS = 30  # Controllo ogni 30 secondi
 
 
+# --- DUMMY SERVER PER HEALTHCHECK DI RENDER ---
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"Wallapop API Bot Active & Running!")
+
+    def log_message(self, format, *args):
+        return  # Silenzia i log HTTP standard per non intasare la console
+
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    print(f"[{get_current_time()}] 🌐 Server HTTP di Healthcheck avviato sulla porta {port}", flush=True)
+    server.serve_forever()
+
+
+# --- FUNZIONI UTILI ---
 def get_current_time():
     return datetime.datetime.now().strftime("%H:%M:%S")
 
@@ -20,7 +44,6 @@ def send_discord_webhook(content=None, embed=None):
     if embed:
         payload["embeds"] = [embed]
     try:
-        # Usiamo impersonate per mascherare anche l'invio al Webhook
         requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10, impersonate="chrome120")
     except Exception as e:
         print(f"[{get_current_time()}] Errore invio Discord: {e}", flush=True)
@@ -37,8 +60,11 @@ def load_seen_items():
 
 
 def save_seen_items(seen_set):
-    with open(SEEN_ITEMS_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(seen_set), f, indent=2)
+    try:
+        with open(SEEN_ITEMS_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(seen_set), f, indent=2)
+    except Exception as e:
+        print(f"[{get_current_time()}] Errore salvataggio JSON locale: {e}", flush=True)
 
 
 def send_discord_alert(item):
@@ -80,11 +106,10 @@ def get_wallapop_data():
         "DeviceOS": "WEB",
     }
 
-    # API di ricerca Wallapop
     api_url = f"https://api.wallapop.com/api/v3/general/search?keywords={SEARCH_KEYWORD}&order_by=newest"
 
     try:
-        # impersonate="chrome120" genera la fingerprint TLS identica a Chrome
+        # Simulazione TLS di Chrome per bypassare blocchi 403
         resp = requests.get(api_url, headers=headers, impersonate="chrome120", timeout=15)
 
         if resp.status_code == 200:
@@ -115,10 +140,7 @@ def get_wallapop_data():
                     "photo": photo_url,
                 })
 
-            print(
-                f"[{now}] ✅ Scansione completata. Trovati {len(filtered_items)} articoli.",
-                flush=True,
-            )
+            print(f"[{now}] ✅ Scansione completata. Trovati {len(filtered_items)} articoli.", flush=True)
             return filtered_items
 
         elif resp.status_code in (403, 406, 429):
@@ -133,28 +155,26 @@ def get_wallapop_data():
         return None
 
 
-def main():
-    seen_items = load_seen_items()
+def check_for_updates(seen_items):
+    now = get_current_time()
     items = get_wallapop_data()
 
     if items is None:
-        print(f"[{get_current_time()}] Scansione interrotta o fallita.", flush=True)
-        return
+        return seen_items
 
-    # Primo avvio: inizializzazione del file visto
+    # Primo avvio dopo il deploy: salviamo gli articoli attuali per non inviare notifiche doppie
     if not seen_items:
-        print(f"[{get_current_time()}] Inizializzazione: salvataggio dei primi {len(items)} articoli...", flush=True)
+        print(f"[{now}] Inizializzazione: salviamo i {len(items)} articoli correnti...", flush=True)
         for item in items:
             item_id = item.get("id")
             if item_id:
                 seen_items.add(item_id)
         save_seen_items(seen_items)
         send_discord_webhook(
-            content=f"🟢 **Wallapop Bot attivo**: Inizializzati {len(seen_items)} articoli per '{SEARCH_KEYWORD}'. In attesa di nuovi annunci!"
+            content=f"🟢 **Wallapop Bot attivo su Render**: Salvati {len(seen_items)} articoli per '{SEARCH_KEYWORD}'. In attesa di nuovi annunci!"
         )
-        return
+        return seen_items
 
-    # Controllo nuovi annunci
     new_found = False
     for item in items:
         item_id = item.get("id")
@@ -162,11 +182,25 @@ def main():
             send_discord_alert(item)
             seen_items.add(item_id)
             new_found = True
-            print(f"[{get_current_time()}] 🔔 Nuova notifica inviata per item ID: {item_id}", flush=True)
+            print(f"[{now}] 🔔 Nuova notifica inviata per item ID: {item_id}", flush=True)
 
     if new_found:
         save_seen_items(seen_items)
 
+    return seen_items
+
 
 if __name__ == "__main__":
-    main()
+    # Avvio del server HTTP in background per Render
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
+    seen_items = load_seen_items()
+    print(f"[{get_current_time()}] 🚀 Bot Wallapop avviato. Controllo ogni {CHECK_INTERVAL_SECONDS} secondi...", flush=True)
+
+    while True:
+        try:
+            seen_items = check_for_updates(seen_items)
+        except Exception as e:
+            print(f"[{get_current_time()}] ❌ Errore imprevisto nel ciclo: {e}", flush=True)
+
+        time.sleep(CHECK_INTERVAL_SECONDS)
