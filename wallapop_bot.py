@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from curl_cffi import requests
 
@@ -10,7 +11,10 @@ from curl_cffi import requests
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521502269118615622/2KQEzJpDBs6db1w8sI5XLXdRn9_A_vTkIG85p55QwNWcPyHl220vmvJ9acj8uMxGqBi8"
 SEARCH_KEYWORD = "derhy"
 SEEN_ITEMS_FILE = "seen_wallapop_items.json"
-CHECK_INTERVAL_SECONDS = 30  # Controllo ogni 30 secondi
+CHECK_INTERVAL_SECONDS = 60  # Consigliato 60s per risparmiare richieste proxy
+
+# Inserisci la tua API Key di ScraperAPI qui sotto:
+SCRAPERAPI_KEY = "94638ebdf1d41f6bfd405581ee81e7af"
 
 
 # --- DUMMY SERVER PER HEALTHCHECK DI RENDER ---
@@ -22,7 +26,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Wallapop API Bot Active & Running!")
 
     def log_message(self, format, *args):
-        return  # Silenzia i log HTTP standard per non intasare la console
+        return
 
 
 def run_dummy_server():
@@ -44,7 +48,7 @@ def send_discord_webhook(content=None, embed=None):
     if embed:
         payload["embeds"] = [embed]
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10, impersonate="chrome120")
+        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
     except Exception as e:
         print(f"[{get_current_time()}] Errore invio Discord: {e}", flush=True)
 
@@ -76,7 +80,7 @@ def send_discord_alert(item):
     embed = {
         "title": f"🟢 Nuovo articolo Wallapop: {title}",
         "url": item_url,
-        "color": 3066993,  # Verde Wallapop
+        "color": 3066993,
         "fields": [
             {"name": "💰 Prezzo", "value": price, "inline": True},
             {"name": "🔍 Keyword", "value": SEARCH_KEYWORD.capitalize(), "inline": True},
@@ -97,20 +101,14 @@ def get_wallapop_data():
     now = get_current_time()
     print(f"[{now}] 🔍 Avvio scansione Wallapop per keyword: '{SEARCH_KEYWORD}'...", flush=True)
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Origin": "https://it.wallapop.com",
-        "Referer": "https://it.wallapop.com/",
-        "DeviceOS": "WEB",
-    }
+    # API Wallapop originale
+    target_url = f"https://api.wallapop.com/api/v3/general/search?keywords={SEARCH_KEYWORD}&order_by=newest"
 
-    api_url = f"https://api.wallapop.com/api/v3/general/search?keywords={SEARCH_KEYWORD}&order_by=newest"
+    # Chiamata incanalata tramite ScraperAPI per ignorare i blocchi 403 dei Datacenter Cloud
+    proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={urllib.parse.quote(target_url)}&country_code=it"
 
     try:
-        # Simulazione TLS di Chrome per bypassare blocchi 403
-        resp = requests.get(api_url, headers=headers, impersonate="chrome120", timeout=15)
+        resp = requests.get(proxy_url, timeout=30)
 
         if resp.status_code == 200:
             data = resp.json()
@@ -151,7 +149,7 @@ def get_wallapop_data():
             return None
 
     except Exception as e:
-        print(f"[{now}] ❌ Errore durante la richiesta a Wallapop: {e}", flush=True)
+        print(f"[{now}] ❌ Errore durante la richiesta: {e}", flush=True)
         return None
 
 
@@ -162,7 +160,6 @@ def check_for_updates(seen_items):
     if items is None:
         return seen_items
 
-    # Primo avvio dopo il deploy: salviamo gli articoli attuali per non inviare notifiche doppie
     if not seen_items:
         print(f"[{now}] Inizializzazione: salviamo i {len(items)} articoli correnti...", flush=True)
         for item in items:
@@ -171,7 +168,7 @@ def check_for_updates(seen_items):
                 seen_items.add(item_id)
         save_seen_items(seen_items)
         send_discord_webhook(
-            content=f"🟢 **Wallapop Bot attivo su Render**: Salvati {len(seen_items)} articoli per '{SEARCH_KEYWORD}'. In attesa di nuovi annunci!"
+            content=f"🟢 **Wallapop Bot attivo su Render**: Salvati {len(seen_items)} articoli per '{SEARCH_KEYWORD}'!"
         )
         return seen_items
 
@@ -191,7 +188,6 @@ def check_for_updates(seen_items):
 
 
 if __name__ == "__main__":
-    # Avvio del server HTTP in background per Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     seen_items = load_seen_items()
